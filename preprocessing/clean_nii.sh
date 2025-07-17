@@ -1,7 +1,7 @@
 #!/bin/bash
 
 read -rp "Enter the directory containing .nii.gz files: " nifti_dir
-if [[ ! -d "$nifti_dir" ]]; then
+if [[ ! -d "../$nifti_dir" ]]; then
   echo "Error: '$nifti_dir' is not a valid directory."
   exit 1
 fi
@@ -11,7 +11,7 @@ echo "Checking for uncompressed .nii files..."
 while IFS= read -r -d '' nii_file; do
   echo "Compressing '$nii_file' -> '${nii_file}.gz'"
   gzip -f "$nii_file"
-done < <(find "$nifti_dir" -type f -name "*.nii" ! -name "*.nii.gz" -print0)
+done < <(find "../$nifti_dir" -type f -name "*.nii" ! -name "*.nii.gz" -print0)
 
 declare -A rest_map
 
@@ -46,7 +46,7 @@ while IFS= read -r -d '' file; do
     echo "Skipping '$filename': does not match expected pattern."
   fi
 
-done < <(find "$nifti_dir" -type f -name "*.nii.gz" -print0)
+done < <(find "../$nifti_dir" -type f -name "*.nii.gz" -print0)
 
 
 # Step 2: Ask the user what to keep/delete

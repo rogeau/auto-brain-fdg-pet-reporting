@@ -8,7 +8,7 @@ if [ ! -d "$input_dir" ]; then
 fi
 
 # Find all .nii.gz files recursively, sorted
-mapfile -t nii_files < <(find "$input_dir" -type f -name "*.nii.gz" | sort)
+mapfile -t nii_files < <(find "$input_dir" -type f -name "r_*.nii.gz" | sort)
 
 if [ ${#nii_files[@]} -eq 0 ]; then
     echo "No .nii.gz files found in $input_dir"
