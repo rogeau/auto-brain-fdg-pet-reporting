@@ -46,7 +46,7 @@ class TransformerBlock(nn.Module):
 
 class ViTEncoder3D(nn.Module):
     def __init__(self, img_size=32, patch_size=4, in_channels=1,
-                 embed_dim=128, depth=6, num_heads=4):
+                 embed_dim=128, depth=6, num_heads=4, fused=False):
         super().__init__()
         num_patches = (img_size // patch_size) ** 3
         self.patch_embed = PatchEmbed3D(in_channels, patch_size, embed_dim)
@@ -56,12 +56,37 @@ class ViTEncoder3D(nn.Module):
             for _ in range(depth)
         ])
         self.norm = nn.LayerNorm(embed_dim)
+        self.depth = depth
+        self.fused = fused
+        self.fusion_weights = nn.Parameter(torch.ones(3))
 
     def forward(self, x):
         x = self.patch_embed(x)
         x = self.pos_embed(x)
-        x = self.blocks(x)
-        return self.norm(x)  
+
+        if self.fused:
+            features = []
+            checkpoints = [int(self.depth / 3),
+                           int(2 * self.depth / 3),
+                           self.depth]
+
+            for i, block in enumerate(self.blocks):
+                x = block(x)
+                if (i + 1) in checkpoints:
+                    features.append(self.norm(x))
+
+            if len(features) != 3:
+                raise ValueError("Did not collect exactly 3 features for fusion.")
+
+            w = torch.softmax(self.fusion_weights, dim=0)
+            fused = sum(wi * fi for wi, fi in zip(w, features))
+            return fused
+
+        else:
+            x = self.blocks(x)
+            return self.norm(x)
+
+
 
 class DecoderBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_ratio=4.0, dropout=0.1):
@@ -87,11 +112,11 @@ class DecoderBlock(nn.Module):
 
         # 1. Self-attention on target (typically just 1 token at inference)
         tgt2 = self.self_attn(self.norm1(tgt), self.norm1(tgt), self.norm1(tgt), attn_mask=attn_mask)[0]
-        tgt = tgt + tgt2
+        tgt = tgt + tgt2 * 0.3
 
         # 2. Cross-attention over encoder memory
         tgt2 = self.cross_attn(self.norm2(tgt), self.norm2(memory), self.norm2(memory))[0]
-        tgt = tgt + tgt2
+        tgt = tgt + tgt2 * 2
 
         # 3. Feedforward
         tgt = tgt + self.mlp(self.norm3(tgt))
@@ -99,9 +124,10 @@ class DecoderBlock(nn.Module):
         return tgt
 
 class Decoder(nn.Module):
-    def __init__(self, embed_dim, vocab_size, num_heads=4, depth=2, mlp_ratio=4.0):
+    def __init__(self, embed_dim, vocab_size, num_heads=4, depth=2, seq_len=150, mlp_ratio=4.0):
         super().__init__()
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, seq_len, embed_dim)) 
         self.layers = nn.ModuleList([
             DecoderBlock(embed_dim, num_heads, mlp_ratio)
             for _ in range(depth)
@@ -109,8 +135,9 @@ class Decoder(nn.Module):
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(embed_dim, vocab_size)  # output logits for next token
 
-    def forward(self, decoder_input_ids, encoder_output, caption_mask=None ):
+    def forward(self, decoder_input_ids, encoder_output, caption_mask=None):
         x = self.token_embedding(decoder_input_ids)
+        x = x + self.pos_embedding[:, :x.size(1)] 
         for layer in self.layers:
             x = layer(x, encoder_output, caption_mask)
         x = self.norm(x)
@@ -119,10 +146,10 @@ class Decoder(nn.Module):
 
 class ReportingModel(nn.Module):
     def __init__(self, img_size=32, patch_size=8, in_channels=1,
-                 embed_dim=128, depth_enc=6, depth_dec=6, num_heads=4, vocab_size=2300):
+                 embed_dim=128, depth_enc=6, depth_dec=6, num_heads=4, vocab_size=2300, seq_len=150):
         super().__init__()
         self.encoder = ViTEncoder3D(img_size, patch_size, in_channels, embed_dim, depth_enc, num_heads)
-        self.decoder = Decoder(embed_dim, vocab_size, num_heads, depth_dec)
+        self.decoder = Decoder(embed_dim, vocab_size, num_heads, depth_dec, seq_len)
 
     def forward(self, images, captions, caption_mask=None):
         encoder_out = self.encoder(images)  # [B, N_patches, embed_dim]

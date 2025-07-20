@@ -5,3 +5,4 @@ nifti/*
 raw_reports/*
 !raw_reports/.gitkeep
 lookup_table.xlsx
+model_epoch_*.pth

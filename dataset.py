@@ -44,7 +44,7 @@ def normalize(image, mode="masked-zscore"):
     else:
         raise ValueError("Unknown normalization mode")
 
-def random_shift_3d(volume, max_fraction=0.1):
+def random_shift_3d(volume, max_fraction=0.10):
     D, H, W = volume.shape
     max_shifts = (int(D * max_fraction), int(H * max_fraction), int(W * max_fraction))
     
@@ -71,7 +71,7 @@ def random_shift_3d(volume, max_fraction=0.1):
 
     return shifted_vol
 
-def random_rotate_3d(volume, angle=10, probability=1):
+def random_rotate_3d(volume, angle=20, probability=1):
     if np.random.rand() > probability:
         return volume  
     
@@ -89,10 +89,9 @@ def transform(vol):
     return vol
 
 
-class VolumeCaptionDataset(Dataset):
-    def __init__(self, data_root, json_path, filenames, target_shape, transform=None):
+class RawDataset(Dataset):
+    def __init__(self, data_root, json_path, filenames, target_shape):
         self.data_root = data_root
-        self.transform = transform
         self.filenames = filenames
         self.target_shape = target_shape
 
@@ -131,13 +130,28 @@ class VolumeCaptionDataset(Dataset):
         img = pad_to_cube(img)
         img = resample(img, target_shape=self.target_shape)
 
-        if self.transform:
-            img = self.transform(img)
+        # img = normalize(img, mode="masked-zscore")
         
-        img = normalize(img, mode="masked-zscore")
-        img = np.expand_dims(img, axis=0)  # [1, D, H, W]
 
-        return torch.tensor(img, dtype=torch.float32), caption
+        return img, caption
+
+class TransformedDataset(torch.utils.data.Dataset):
+    def __init__(self, base_dataset, transform=None):
+        self.base_dataset = base_dataset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        data = self.base_dataset[idx]
+        image, caption = data
+        if self.transform:
+            image = self.transform(image)
+        image = normalize(image, mode="masked-zscore")
+        image = np.expand_dims(image, axis=0)
+
+        return torch.tensor(image, dtype=torch.float32), caption
 
 def show_slices(image_3d, title=None):
     """Display one central slice in each dimension (axial, coronal, sagittal)"""
@@ -164,8 +178,9 @@ def show_slices(image_3d, title=None):
 
 
 def main():
-    dataset = VolumeCaptionDataset(data_root="dataset/", json_path="dataset/reports.json", filenames=filenames, target_shape=64, transform=None)
-    image, caption = dataset[2]
+    dataset = RawDataset(data_root="dataset/", json_path="dataset/reports.json", filenames=filenames, target_shape=64)
+    transformed_dataset = TransformedDataset(dataset, transform=transform)
+    image, caption = transformed_dataset[2]
     print(image.shape)
     print(caption)
     print(len(dataset))
