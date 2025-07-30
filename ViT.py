@@ -91,8 +91,12 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
-        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
-        x = x + self.mlp(self.norm2(x))
+        norm_x = self.norm1(x)
+        x = x + self.attn(norm_x, norm_x, norm_x)[0]
+        
+        norm_x2 = self.norm2(x)
+        x = x + self.mlp(norm_x2)
+        
         return x
 
 class ViTEncoder3D(nn.Module):
@@ -160,19 +164,17 @@ class DecoderBlock(nn.Module):
         )
 
     def forward(self, tgt, memory, attn_mask=None):
-        # tgt: [B, 1, embed_dim] — current predicted token
-        # memory: [B, N, embed_dim] — full encoder output (e.g., patch tokens from ViT)
+        norm_tgt1 = self.norm1(tgt)
+        tgt2 = self.self_attn(norm_tgt1, norm_tgt1, norm_tgt1, attn_mask=attn_mask)[0]
+        tgt = tgt + tgt2
 
-        # 1. Self-attention on target (typically just 1 token at inference)
-        tgt2 = self.self_attn(self.norm1(tgt), self.norm1(tgt), self.norm1(tgt), attn_mask=attn_mask)[0]
-        tgt = tgt + tgt2 * 0.3
+        norm_tgt2 = self.norm2(tgt)
+        norm_memory = self.norm2(memory)
+        tgt2 = self.cross_attn(norm_tgt2, norm_memory, norm_memory)[0]
+        tgt = tgt + tgt2
 
-        # 2. Cross-attention over encoder memory
-        tgt2 = self.cross_attn(self.norm2(tgt), self.norm2(memory), self.norm2(memory))[0]
-        tgt = tgt + tgt2 * 2
-
-        # 3. Feedforward
-        tgt = tgt + self.mlp(self.norm3(tgt))
+        norm_tgt3 = self.norm3(tgt)
+        tgt = tgt + self.mlp(norm_tgt3)
 
         return tgt
 

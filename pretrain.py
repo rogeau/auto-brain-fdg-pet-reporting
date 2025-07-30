@@ -37,7 +37,7 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=pretrain_lr, weight_decay=0
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs_pretraining)
 scaler = GradScaler("cuda")
 
-resume_path = 'pretraining_checkpoints/checkpoint_epoch160.pth'
+resume_path = 'pretraining_checkpoints/checkpoint_epoch190.pth'
 if os.path.exists(resume_path):
     checkpoint = torch.load(resume_path)
     model.load_state_dict(checkpoint['model_state_dict'])

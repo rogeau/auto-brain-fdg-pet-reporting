@@ -15,8 +15,8 @@ vocab_size = 2300
 batch_size = 6
 seq_len = 150
 num_epochs = 200
-fused=True
-freeze_epochs = 3
+fused=False
+freeze_epochs = 0
 
 
 # pretraining
