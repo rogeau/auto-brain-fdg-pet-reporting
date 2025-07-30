@@ -90,68 +90,82 @@ def transform(vol):
 
 
 class RawDataset(Dataset):
-    def __init__(self, data_root, json_path, filenames, target_shape):
+    def __init__(self, data_root, target_shape, json_path=None, filenames=None, pretraining=False):
         self.data_root = data_root
-        self.filenames = filenames
         self.target_shape = target_shape
-
-        with open(json_path, 'r') as f:
-            raw = json.load(f)
-        self.caption_lookup = {
-            (entry['SubjectID'], entry['Date']): entry['PET_results']
-            for entry in raw
-        }
-
-        # Find all NIfTI files and build list of (path, SubjectID, Date)
+        self.filenames = filenames
+        self.pretraining = pretraining
+        root = Path(data_root)
         self.samples = []
 
-        # Convert root to Path object
-        root = Path(data_root)
+        if self.pretraining:
+            for nii_path in root.glob("**/r_mean_volume.nii.gz"):
+                self.samples.append(str(nii_path))
 
-        # Match all NIfTI files under SubjectID/Date/
-        for nii_path in root.glob("**/*.nii.gz"):
-            if nii_path.name in self.filenames:
-                subject_id = nii_path.parts[-3]
-                date = nii_path.parts[-2]
-                self.samples.append((str(nii_path), subject_id, date))
+        else:
+            with open(json_path, 'r') as f:
+                raw = json.load(f)
+                self.caption_lookup = {
+                    (entry['SubjectID'], entry['Date']): entry['PET_results']
+                    for entry in raw
+                }
+                
+
+            for nii_path in root.glob("**/*.nii.gz"):
+                if nii_path.name in self.filenames:
+                    subject_id = nii_path.parts[-3]
+                    date = nii_path.parts[-2]
+                    self.samples.append((str(nii_path), subject_id, date))
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
-        path, subject_id, date = self.samples[idx]
-        key = (subject_id, date)
-        if key not in self.caption_lookup:
-            raise KeyError(f"Missing caption for SubjectID={subject_id}, Date={date}")
-        caption = self.caption_lookup[key]
-
-        # Load and preprocess image
-        img = load_nifti(path)
-        img = pad_to_cube(img)
-        img = resample(img, target_shape=self.target_shape)
-
-        # img = normalize(img, mode="masked-zscore")
+        if self.pretraining:
+            path = self.samples[idx]
+            image = load_nifti(path)
+            image = pad_to_cube(image)
+            image = resample(image, target_shape=self.target_shape)
+            return image
         
+        else:
+            path, subject_id, date = self.samples[idx]
+            key = (subject_id, date)
+            if key not in self.caption_lookup:
+                raise KeyError(f"Missing caption for SubjectID={subject_id}, Date={date}")
+            caption = self.caption_lookup[key]
 
-        return img, caption
+            # Load and preprocess image
+            image = load_nifti(path)
+            image = pad_to_cube(image)
+            image = resample(image, target_shape=self.target_shape)
+
+            return image, caption
 
 class TransformedDataset(torch.utils.data.Dataset):
-    def __init__(self, base_dataset, transform=None):
+    def __init__(self, base_dataset, transform=None, pretraining=False):
         self.base_dataset = base_dataset
         self.transform = transform
+        self.pretraining = pretraining
 
     def __len__(self):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        data = self.base_dataset[idx]
-        image, caption = data
-        if self.transform:
-            image = self.transform(image)
-        image = normalize(image, mode="masked-zscore")
-        image = np.expand_dims(image, axis=0)
-
-        return torch.tensor(image, dtype=torch.float32), caption
+        data = self.base_dataset[idx] 
+        if self.pretraining:
+            if self.transform:
+                image = self.transform(data)
+            image = normalize(image, mode="masked-zscore")
+            image = np.expand_dims(image, axis=0)
+            return torch.tensor(image, dtype=torch.float32)
+        else:
+            image, caption = data
+            if self.transform:
+                image = self.transform(image)
+            image = normalize(image, mode="masked-zscore")
+            image = np.expand_dims(image, axis=0)
+            return torch.tensor(image, dtype=torch.float32), caption
 
 def show_slices(image_3d, title=None):
     """Display one central slice in each dimension (axial, coronal, sagittal)"""

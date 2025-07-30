@@ -1,8 +1,15 @@
 dataset/*
+!dataset/.gitkeep
 dcm/*
 !dcm/.gitkeep
 nifti/*
 raw_reports/*
 !raw_reports/.gitkeep
-lookup_table.xlsx
 model_epoch_*.pth
+adni_nifd/adni/*
+adni_nifd/nifd/*
+imgs_pretraining/
+preprocessing/lookup_table.xlsx
+pretraining_checkpoints/*
+__pycache__/
+pretraining.log

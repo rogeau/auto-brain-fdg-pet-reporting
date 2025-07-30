@@ -1,29 +1,80 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import time
+
+# class PatchEmbed3D(nn.Module):
+#     # def __init__(self, in_channels=1, patch_size=8, embed_dim=256):
+#     #     super().__init__()
+#     #     self.patch_size = patch_size
+#     #     self.proj = nn.Conv3d(in_channels, embed_dim,
+#     #                           kernel_size=patch_size,
+#     #                           stride=patch_size)
+    
+#     # def forward(self, x):
+#     #     x = self.proj(x)  # Shape: [B, embed_dim, D/P, H/P, W/P]
+#     #     x = x.flatten(2)  # Flatten spatial dims
+#     #     x = x.transpose(1, 2)  # Shape: [B, N_patches, embed_dim]
+#     #     return x
+
 
 class PatchEmbed3D(nn.Module):
     def __init__(self, in_channels=1, patch_size=8, embed_dim=256):
         super().__init__()
         self.patch_size = patch_size
-        self.proj = nn.Conv3d(in_channels, embed_dim,
-                              kernel_size=patch_size,
-                              stride=patch_size)
-    
-    def forward(self, x):
-        x = self.proj(x)  # Shape: [B, embed_dim, D/P, H/P, W/P]
-        x = x.flatten(2)  # Flatten spatial dims
-        x = x.transpose(1, 2)  # Shape: [B, N_patches, embed_dim]
+        self.in_channels = in_channels
+        self.patch_dim = (patch_size ** 3) * in_channels  # each patch flattened into vector
+        self.proj = nn.Linear(self.patch_dim, embed_dim)
+
+    def patchify(self, x):
+        """
+        x: [B, C, H, W, D] → [B, N, patch_dim]
+        """
+        B, C, H, W, D = x.shape
+        p = self.patch_size
+        assert H % p == 0 and W % p == 0 and D % p == 0, "Dimensions must be divisible by patch size"
+
+        x = x.view(B, C,
+                   H // p, p,
+                   W // p, p,
+                   D // p, p)
+        x = x.permute(0, 2, 4, 6, 3, 5, 7, 1).contiguous()  # [B, H//p, W//p, D//p, p, p, p, C]
+        x = x.view(B, -1, p * p * p * C)  # [B, N, patch_dim]
         return x
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, num_patches, embed_dim):
-        super().__init__()
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+    def unpatchify(self, patches):
+        """
+        patches: [B, N, patch_dim] → [B, C, H, W, D]
+        """
+        B, N, patch_dim = patches.shape
+        p = self.patch_size
+        C = self.in_channels
+        D_ = int(round(N ** (1 / 3)))
+        assert D_ ** 3 == N, "Number of patches must be a perfect cube"
+
+        x = patches.view(B, D_, D_, D_, p, p, p, C)
+        x = x.permute(0, 7, 1, 4, 2, 5, 3, 6).contiguous()
+        x = x.view(B, C, D_ * p, D_ * p, D_ * p)
+        return x
 
     def forward(self, x):
-        return x + self.pos_embed
+        """
+        x: [B, C, H, W, D] → [B, N, embed_dim]
+        """
+        x = self.patchify(x)  # [B, N, patch_dim]
+        x = self.proj(x)      # [B, N, embed_dim]
+        return x
+
+
+
+# class PositionalEncoding(nn.Module):
+#     def __init__(self, num_patches, embed_dim):
+#         super().__init__()
+#         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+#         nn.init.trunc_normal_(self.pos_embed, std=0.02)
+
+#     def forward(self, x):
+#         return x + self.pos_embed
 
 class TransformerBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, mlp_ratio=4.0, dropout=0.1):
@@ -48,9 +99,11 @@ class ViTEncoder3D(nn.Module):
     def __init__(self, img_size=32, patch_size=4, in_channels=1,
                  embed_dim=128, depth=6, num_heads=4, fused=False):
         super().__init__()
-        num_patches = (img_size // patch_size) ** 3
+        self.patch_size = patch_size
+        num_patches = (img_size // self.patch_size) ** 3
         self.patch_embed = PatchEmbed3D(in_channels, patch_size, embed_dim)
-        self.pos_embed = PositionalEncoding(num_patches, embed_dim)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
         self.blocks = nn.Sequential(*[
             TransformerBlock(embed_dim, num_heads)
             for _ in range(depth)
@@ -62,7 +115,7 @@ class ViTEncoder3D(nn.Module):
 
     def forward(self, x):
         x = self.patch_embed(x)
-        x = self.pos_embed(x)
+        x = x + self.pos_embed
 
         if self.fused:
             features = []
@@ -146,9 +199,9 @@ class Decoder(nn.Module):
 
 class ReportingModel(nn.Module):
     def __init__(self, img_size=32, patch_size=8, in_channels=1,
-                 embed_dim=128, depth_enc=6, depth_dec=6, num_heads=4, vocab_size=2300, seq_len=150):
+                 embed_dim=128, depth_enc=6, depth_dec=6, num_heads=4, vocab_size=2300, seq_len=150, fused=True):
         super().__init__()
-        self.encoder = ViTEncoder3D(img_size, patch_size, in_channels, embed_dim, depth_enc, num_heads)
+        self.encoder = ViTEncoder3D(img_size, patch_size, in_channels, embed_dim, depth_enc, num_heads, fused=fused)
         self.decoder = Decoder(embed_dim, vocab_size, num_heads, depth_dec, seq_len)
 
     def forward(self, images, captions, caption_mask=None):
